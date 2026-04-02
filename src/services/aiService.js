@@ -7,32 +7,34 @@ const openai = new OpenAI({
 
 async function extractSlipData(imagePath) {
   try {
-    // อ่านรูปเป็น base64
     const imageBase64 = fs.readFileSync(imagePath, {
       encoding: "base64",
     });
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0, // ลดความมั่ว
+      temperature: 0,
       messages: [
         {
           role: "system",
           content: `
-You are a system that extracts structured data from Thai bank slips.
+You are an AI that extracts expense data from ANY document:
+(bank slip, receipt, invoice, bill).
 
 Rules:
 - Return ONLY raw JSON (no markdown, no explanation)
-- Do NOT include \`\`\`json or \`\`\`
-- All fields must exist
+- Do NOT include \`\`\`
+- Always return all fields
 
-Format:
+Fields:
 {
   "amount": number,
   "date": "YYYY-MM-DD",
   "time": "HH:mm",
   "sender": "string",
-  "receiver": "string"
+  "receiver": "string",
+  "category": "food | travel | shopping | bills | other",
+  "type": "slip | receipt | invoice | other"
 }
 `,
         },
@@ -41,7 +43,7 @@ Format:
           content: [
             {
               type: "text",
-              text: "Extract data from this Thai bank slip.",
+              text: "Extract expense data from this document.",
             },
             {
               type: "image_url",
@@ -56,31 +58,61 @@ Format:
 
     let result = response.choices[0].message.content;
 
-    console.log("AI RAW:", result); // debug
+    console.log("AI RAW:", result);
 
-    // 🔥 clean markdown เผื่อ AI ยังแอบใส่มา
+    // 🔥 clean markdown
     result = result
       .replace(/```json/g, "")
       .replace(/```/g, "")
       .trim();
 
-    // 🔥 parse JSON
     let data;
+
     try {
       data = JSON.parse(result);
     } catch (err) {
+      console.error("PARSE ERROR:", result);
       throw new Error("AI returned invalid JSON");
     }
 
-    // 🔥 normalize data (สำคัญมาก)
+    // 🔥 normalize amount
+    const cleanAmount =
+      Number(String(data.amount).replace(/[^0-9.]/g, "")) || 0;
+
+    // 🔥 VALID CATEGORY (กัน AI มั่ว)
+    const validCategories = [
+      "food",
+      "travel",
+      "shopping",
+      "bills",
+      "other",
+    ];
+
+    let category = data.category;
+
+    if (!validCategories.includes(category)) {
+      console.warn("INVALID CATEGORY FROM AI:", category);
+      category = "other";
+    }
+
+    // 🔥 VALID TYPE
+    const validTypes = ["slip", "receipt", "invoice", "other"];
+
+    let type = data.type;
+
+    if (!validTypes.includes(type)) {
+      console.warn("INVALID TYPE FROM AI:", type);
+      type = "other";
+    }
+
     return {
-      amount: Number(
-        String(data.amount).replace(/[^0-9.]/g, "")
-      ) || 0,
+      amount: cleanAmount,
       date: data.date || "",
       time: data.time || "",
       sender: data.sender || "Unknown",
       receiver: data.receiver || "Unknown",
+      category,
+      type,
     };
   } catch (error) {
     console.error("AI SERVICE ERROR:", error.message);
